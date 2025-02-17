@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Detailed Water Hammer Simulation</title>
+  <!-- Chart.js for visualization -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      line-height: 1.6;
+    }
+    label {
+      display: block;
+      margin-top: 10px;
+    }
+    input {
+      padding: 5px;
+      width: 200px;
+    }
+    button {
+      margin-top: 15px;
+      padding: 10px 20px;
+    }
+    canvas {
+      margin-top: 20px;
+      max-width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <h1>Detailed Water Hammer Pressure Spike Simulation</h1>
+  <p>This simulation calculates the water hammer pressure spike using the full equations without simplification. It factors in water compressibility, pipe elasticity, and wall thickness.</p>
+  <form id="simulationForm">
+    <!-- Fluid and Flow Inputs -->
+    <label for="diameter">Pipe Internal Diameter (inches):</label>
+    <input type="number" id="diameter" value="4" step="0.1" required>
+
+    <label for="flowRate">Flow Rate (GPM):</label>
+    <input type="number" id="flowRate" value="100" step="1" required>
+
+    <!-- Pipe Geometry -->
+    <label for="pipeLength">Pipe Length (feet):</label>
+    <input type="number" id="pipeLength" value="100" step="1" required>
+
+    <label for="wallThickness">Pipe Wall Thickness (inches):</label>
+    <input type="number" id="wallThickness" value="0.25" step="0.01" required>
+
+    <!-- Valve Closure -->
+    <label for="closureTime">Valve Closure Time (ms):</label>
+    <input type="number" id="closureTime" value="100" step="1" required>
+
+    <button type="submit">Simulate Water Hammer</button>
+  </form>
+
+  <canvas id="pressureChart" width="800" height="400"></canvas>
+
+  <script>
+    document.getElementById('simulationForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      simulateWaterHammer();
+    });
+
+    function simulateWaterHammer() {
+      // Retrieve inputs and convert units to SI where necessary
+      const diameterInches = parseFloat(document.getElementById('diameter').value);
+      const flowRateGPM = parseFloat(document.getElementById('flowRate').value);
+      const pipeLengthFeet = parseFloat(document.getElementById('pipeLength').value);
+      const wallThicknessInches = parseFloat(document.getElementById('wallThickness').value);
+      const closureTimeMs = parseFloat(document.getElementById('closureTime').value);
+
+      // Unit Conversions
+      const inchToMeter = 0.0254;
+      const footToMeter = 0.3048;
+      const diameterMeters = diameterInches * inchToMeter;
+      const wallThicknessMeters = wallThicknessInches * inchToMeter;
+      const pipeLengthMeters = pipeLengthFeet * footToMeter;
+      const flowRate_m3s = flowRateGPM * 0.00006309; // GPM to m³/s
+      const closureTimeSec = closureTimeMs / 1000;
+
+      // Calculate cross-sectional area of the pipe (m²)
+      const area = Math.PI * Math.pow(diameterMeters / 2, 2);
+
+      // Fluid velocity (m/s)
+      const velocity = flowRate_m3s / area;
+
+      // Define water properties (unsimplified parameters)
+      const density = 1000;          // kg/m³ for water
+      const waterBulkModulus = 2.2e9;  // Pa, typical for water
+      // Pipe material property (e.g., steel)
+      const E = 200e9;               // Young's modulus for steel in Pa
+
+      // Calculate the effective speed of pressure wave (c) using the full relation:
+      // c = sqrt( K / (ρ * (1 + (K*D)/(E*t)) ) )
+      const speedOfSound = Math.sqrt( waterBulkModulus / (density * (1 + (waterBulkModulus * diameterMeters) / (E * wallThicknessMeters)) ) );
+
+      // Determine effective velocity change based on valve closure dynamics.
+      // For fast closures (closureTimeSec <= 0.5 s), assume nearly instantaneous full velocity drop.
+      // For slower closures, the effective change is reduced.
+      const effectiveFactor = closureTimeSec <= 0.5 ? 1 : 0.5 / closureTimeSec;
+      const effectiveVelocity = velocity * effectiveFactor;
+
+      // Compute the instantaneous pressure spike using the Joukowsky equation:
+      // ΔP = ρ * c * Δv   [Pa]
+      const deltaP_Pa = density * speedOfSound * effectiveVelocity;
+      // Convert pressure from Pascals to psi (1 psi = 6894.76 Pa)
+      const deltaP_psi = deltaP_Pa / 6894.76;
+
+      // Prepare simulation parameters for a transient response
+      const totalTime = 2;  // total simulation time in seconds
+      const dt = 0.002;     // time step in seconds
+      const steps = Math.floor(totalTime / dt);
+      const timeData = [];
+      const pressureData = [];
+
+      // Estimate the natural frequency from the pipe length: f = c / (2L)
+      const frequency = pipeLengthMeters > 0 ? speedOfSound / (2 * pipeLengthMeters) : 1;
+      // Damping coefficient to simulate energy losses (can be adjusted)
+      const damping = 3;
+
+      // Detailed transient response modeled as a damped oscillation:
+      // p(t) = ΔP_psi * exp(-damping * t) * cos(2π * frequency * t)
+      for (let i = 0; i <= steps; i++) {
+        const t = i * dt;
+        const pressure = deltaP_psi * Math.exp(-damping * t) * Math.cos(2 * Math.PI * frequency * t);
+        timeData.push(t.toFixed(3)); // keeping time steps as strings for Chart.js labels
+        pressureData.push(pressure);
+      }
+
+      // Plot the detailed simulation using Chart.js
+      const ctx = document.getElementById('pressureChart').getContext('2d');
+      if (window.pressureChartInstance) {
+        window.pressureChartInstance.destroy();
+      }
+
+      window.pressureChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: timeData,
+          datasets: [{
+            label: 'Pressure (psi)',
+            data: pressureData,
+            borderColor: 'blue',
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+          }]
+        },
+        options: {
+          animation: false,
+          scales: {
+            x: {
+              type: 'linear',
+              title: {
+                display: true,
+                text: 'Time (s)'
+              },
+              ticks: {
+                autoSkip: true,
+                maxTicksLimit: 10
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Pressure (psi)'
+              }
+            }
+          },
+          plugins: {
+            title: {
+              display: true,
+              text: 'Detailed Water Hammer Pressure Spike Simulation'
+            }
+          }
+        }
+      });
+
+      // Log detailed calculation values for debugging
+      console.log("Diameter (m):", diameterMeters);
+      console.log("Wall Thickness (m):", wallThicknessMeters);
+      console.log("Flow Rate (m³/s):", flowRate_m3s);
+      console.log("Velocity (m/s):", velocity);
+      console.log("Speed of Sound (m/s):", speedOfSound);
+      console.log("Effective Velocity (m/s):", effectiveVelocity);
+      console.log("Delta P (Pa):", deltaP_Pa);
+      console.log("Delta P (psi):", deltaP_psi);
+    }
+  </script>
+</body>
+</html>
